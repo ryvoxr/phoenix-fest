@@ -52,6 +52,16 @@ struct Program {
     id: ProgramId,
 }
 
+impl Program {
+    fn is_full(&self) -> bool {
+        self.students.len() as u8 >= self.max_cap
+    }
+
+    fn student_is_assigned(&self, studentid: StudentId) -> bool {
+        self.students.contains(&studentid)
+    }
+}
+
 fn load_programs() -> Result<Vec<Program>, Box<dyn Error>> {
     let file = File::open("src/programs.csv")?;
     let mut rdr = csv::Reader::from_reader(file);
@@ -69,6 +79,7 @@ struct Student {
     name: String,
     prefs: HashMap<Block, Preference>,
     id: StudentId,
+    assignments: HashMap<Block, ProgramId>,
 }
 
 type StudentId = usize;
@@ -97,7 +108,16 @@ impl Student {
             name: format!("{} {}", &record[3], &record[2]),
             prefs,
             id,
+            assignments: HashMap::new(),
         })
+    }
+
+    fn get_pref_program(&self, block: &Block, prefn: usize) -> Option<ProgramId> {
+        *self.prefs.get(block)?.get(prefn)?
+    }
+
+    fn is_assigned(&self, block: &Block) -> bool {
+        self.assignments.contains_key(block)
     }
 }
 
@@ -128,28 +148,87 @@ impl App {
         Ok(App { programs, students })
     }
 
-    fn assign_students(&mut self) -> Result<(), Box<dyn Error>> {
-        for prefn in 0..5 {
-            for block in Block::VALUES.iter() {
-                for student in &self.students {
-                    let pref = student.prefs.get(block).ok_or("Invalid block")?;
-                    let program = pref[prefn];
-                    match program {
-                        Some(p) => {}
-                        None => {}
+    fn assign(&mut self) -> Result<(), Box<dyn Error>> {
+        for block in Block::VALUES.iter() {
+            for prefn in 0..5 {
+                // TODO: sort students by how bad their assignment is
+                for studentid in 0..self.students.len() {
+                    let student = &mut self.students[studentid];
+                    if student.is_assigned(block) {
+                        continue;
                     }
+                    let programid = match student.get_pref_program(block, prefn) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let program = &mut self.programs[programid];
+                    if program.is_full() {
+                        continue;
+                    }
+                    program.students.push(student.id);
+                    student.assignments.insert(block.clone(), programid);
                 }
+            }
+            // assign unassigned students to least full programs
+            for student_id in 0..self.students.len() {
+                if self.students[student_id].is_assigned(block) {
+                    continue;
+                }
+                println!("no pref assign");
+                self.no_pref_assign(block, student_id);
             }
         }
         Ok(())
     }
+
+    fn no_pref_assign(&mut self, block: &Block, student_id: StudentId) {
+        let program_ids = self.program_id_list_sorted(block);
+        let student = &mut self.students[student_id];
+        for program_id in program_ids {
+            let program = &mut self.programs[program_id];
+            if program.is_full() {
+                continue;
+            }
+            program.students.push(student.id);
+            student.assignments.insert(block.clone(), program_id);
+            return;
+        }
+    }
+
+    // sort program ids by how many students are assigned to them, filter by block
+    fn program_id_list_sorted(&self, block: &Block) -> Vec<ProgramId> {
+        let mut program_ids: Vec<ProgramId> = (0..self.programs.len()).filter(|&id| {
+            self.programs[id].block == *block
+        }).collect();
+        program_ids.sort_by(|a, b| {
+            let program_a = &self.programs[*a];
+            let program_b = &self.programs[*b];
+            program_a.students.len().cmp(&program_b.students.len())
+        });
+        program_ids
+    }
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let app = App::new()?;
-    for program in &app.programs {
-        println!("{:?}", program);
+    let mut app = App::new()?;
+    app.assign()?;
+
+    for student in app.students.iter() {
+        println!("{}:", student.name);
+        for (block, programid) in student.assignments.iter() {
+            let program = &app.programs[*programid];
+            println!("  {:?}: {}", block, program.name);
+        }
     }
+
+    // for program in app.programs.iter() {
+        // println!("{}:", program.name);
+        // for studentid in program.students.iter() {
+            // let student = &app.students[*studentid];
+            // println!("  {}", student.name);
+        // }
+    // }
+
     Ok(())
 }
 
