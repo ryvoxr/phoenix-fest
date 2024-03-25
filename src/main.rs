@@ -44,6 +44,7 @@ impl<'de> Deserialize<'de> for Block {
 struct Program {
     name: String,
     block: Block,
+    room_num: u32,
     min_cap: u8,
     max_cap: u8,
     #[serde(skip)]
@@ -119,6 +120,34 @@ impl Student {
     fn is_assigned(&self, block: &Block) -> bool {
         self.assignments.contains_key(block)
     }
+
+    fn get_assignment_score(&self) -> Option<u8> {
+        let mut score = 0;
+        for block in Block::VALUES.iter() {
+            let program_id = match self.assignments.get(block) {
+                Some(p) => p,
+                None => break,
+            };
+            let pref = self.prefs.get(block)?;
+            let mut requested = false;
+            for (i, p) in pref.iter().enumerate() {
+                match p {
+                    None => continue,
+                    Some(p) => {
+                        if p == program_id {
+                            score += i as u8;
+                            requested = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !requested {
+                score += 10;
+            }
+        }
+        Some(score)
+    }
 }
 
 type Preference = Vec<Option<ProgramId>>;
@@ -151,9 +180,9 @@ impl App {
     fn assign(&mut self) -> Result<(), Box<dyn Error>> {
         for block in Block::VALUES.iter() {
             for prefn in 0..5 {
-                // TODO: sort students by how bad their assignment is
-                for studentid in 0..self.students.len() {
-                    let student = &mut self.students[studentid];
+                let student_ids = self.student_id_list_sorted();
+                for student_id in student_ids {
+                    let student = &mut self.students[student_id];
                     if student.is_assigned(block) {
                         continue;
                     }
@@ -174,7 +203,6 @@ impl App {
                 if self.students[student_id].is_assigned(block) {
                     continue;
                 }
-                println!("no pref assign");
                 self.no_pref_assign(block, student_id);
             }
         }
@@ -207,6 +235,18 @@ impl App {
         });
         program_ids
     }
+
+    // sort student ids by assignment score (greatest first) (greater is worse assignment)
+    fn student_id_list_sorted(&self) -> Vec<StudentId> {
+        let mut student_ids: Vec<StudentId> = (0..self.students.len()).collect();
+        student_ids.sort_by(|a, b| {
+            let student_a = &self.students[*a];
+            let student_b = &self.students[*b];
+            student_a.get_assignment_score().cmp(&student_b.get_assignment_score())
+        });
+        student_ids.reverse();
+        student_ids
+    }
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
@@ -214,17 +254,19 @@ fn run() -> Result<(), Box<dyn Error>> {
     app.assign()?;
 
     for student in app.students.iter() {
-        println!("{}:", student.name);
-        for (block, programid) in student.assignments.iter() {
-            let program = &app.programs[*programid];
-            println!("  {:?}: {}", block, program.name);
+        println!("{}: {}", student.name, student.get_assignment_score().unwrap());
+        for (block, program_id) in student.assignments.iter() {
+            let program = &app.programs[*program_id];
+            println!("  {:?}: {}", block, program.name.trim_start_matches(char::is_numeric).trim_start_matches(". "));
         }
     }
 
+    println!("{:?}", app.students[*app.student_id_list_sorted().first().unwrap()].get_assignment_score());
+
     // for program in app.programs.iter() {
         // println!("{}:", program.name);
-        // for studentid in program.students.iter() {
-            // let student = &app.students[*studentid];
+        // for student_id in program.students.iter() {
+            // let student = &app.students[*student_id];
             // println!("  {}", student.name);
         // }
     // }
